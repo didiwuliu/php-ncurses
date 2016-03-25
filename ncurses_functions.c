@@ -25,10 +25,22 @@
 #include "php_ini.h"
 #include "php_ncurses.h"
 
+#define N_RETURN_STRINGL(s,l,c) RETURN_STRINGL(s,l)
+#define ZEND_REGISTER_RESOURCE(ret, res, type) \
+    ZVAL_RES((ret), zend_register_resource((void *)(res), (type)))
+
+#define FETCH_WINRES(r, z) \
+    (r) = (WINDOW **)zend_fetch_resource(Z_RES_P(*z), "ncurses_window", le_ncurses_windows)
+#if HAVE_NCURSES_PANEL
+# define FETCH_PANEL(r, z)  \
+    (r) = (PANEL **)zend_fetch_resource(Z_RES_P(*z), "ncurses_panel", le_ncurses_panels)
+#endif
+/*
 #define FETCH_WINRES(r, z)  ZEND_FETCH_RESOURCE(r, WINDOW **, z, -1, "ncurses_window", le_ncurses_windows)
 #if HAVE_NCURSES_PANEL
 # define FETCH_PANEL(r, z)  ZEND_FETCH_RESOURCE(r, PANEL **, z, -1, "ncurses_panel", le_ncurses_panels)
 #endif
+*/
 
 #define IS_NCURSES_INITIALIZED() \
 		if (!NCURSES_G(registered_constants)) { \
@@ -97,7 +109,7 @@ PHP_FUNCTION(ncurses_delwin)
 
 	FETCH_WINRES(w, &handle);
 
-	zend_list_delete(Z_LVAL_P(handle));
+	zend_list_delete(Z_RES_P(handle));
 	RETURN_TRUE;
 }
 /* }}} */
@@ -137,27 +149,28 @@ PHP_FUNCTION(ncurses_init)
 	keypad(stdscr, TRUE);  /* enable keyboard mapping */
 	(void) nonl();         /* tell curses not to do NL->CR/NL on output */
 	(void) cbreak();       /* take input chars one at a time, no wait for \n */
+    int module_number = NCURSES_G(module_number);
 
 	if (!NCURSES_G(registered_constants)) {
 		zend_constant c;
 		
 		WINDOW **pscr = (WINDOW**)emalloc(sizeof(WINDOW *));
-		zval *zscr;
+		zval *zscr = emalloc(sizeof(zval));
 
 		*pscr = stdscr;
-		MAKE_STD_ZVAL(zscr);
-		ZEND_REGISTER_RESOURCE(zscr, pscr, le_ncurses_windows);
+        ZEND_REGISTER_RESOURCE(zscr, pscr, le_ncurses_windows);
 		c.value = *zscr;
 		zval_copy_ctor(&c.value);
 		c.flags = CONST_CS;
-		c.name = zend_strndup(ZEND_STRL("STDSCR"));
-		c.name_len = sizeof("STDSCR");
+		c.name = zend_string_init(ZEND_STRL("STDSCR"), 1);
+        c.module_number = module_number;
 		zend_register_constant(&c TSRMLS_CC);
 
 		/* we need this "interesting" arrangement because the
 		 * underlying values of the ACS_XXX defines are not
 		 * initialized until after ncurses has been initialized */
 		
+/*
 #define PHP_NCURSES_DEF_CONST(x)    \
 		ZVAL_LONG(zscr, x);         \
 		c.value = *zscr;            \
@@ -166,6 +179,9 @@ PHP_FUNCTION(ncurses_init)
 		c.name = zend_strndup(ZEND_STRL("NCURSES_" #x)); \
 		c.name_len = sizeof("NCURSES_" #x);                           \
 		zend_register_constant(&c TSRMLS_CC)
+*/
+#define PHP_NCURSES_DEF_CONST(x) \
+    REGISTER_LONG_CONSTANT(#x, x, CONST_CS)
 		
 		PHP_NCURSES_DEF_CONST(ACS_ULCORNER);
 		PHP_NCURSES_DEF_CONST(ACS_LLCORNER);
@@ -193,7 +209,8 @@ PHP_FUNCTION(ncurses_init)
 		PHP_NCURSES_DEF_CONST(ACS_LANTERN);
 		PHP_NCURSES_DEF_CONST(ACS_BLOCK);
 		
-		FREE_ZVAL(zscr);
+		//FREE_ZVAL(zscr);
+        efree(zscr);
 		NCURSES_G(registered_constants) = 1;
 	}
 }
@@ -505,7 +522,7 @@ PHP_FUNCTION(ncurses_erasechar)
 	temp[0] = erasechar();
 	temp[1] = '\0';
 
-	RETURN_STRINGL (temp, 1, 1);
+	N_RETURN_STRINGL (temp, 1, 1);
 }
 /* }}} */
 
@@ -556,7 +573,7 @@ PHP_FUNCTION(ncurses_inch)
 	temp[0] = inch();
 	temp[1] = '\0';
 
-	RETURN_STRINGL (temp, 1, 1);
+	N_RETURN_STRINGL (temp, 1, 1);
 }
 /* }}} */
 
@@ -588,7 +605,7 @@ PHP_FUNCTION(ncurses_killchar)
 	temp[0] = killchar();
 	temp[1] = '\0';
 
-	RETURN_STRINGL (temp, 1, 1);
+	N_RETURN_STRINGL (temp, 1, 1);
 }
 /* }}} */
 
@@ -1473,7 +1490,7 @@ PHP_FUNCTION(ncurses_instr)
 	str = (char *)emalloc(COLS + 1);
 	retval = instr(str);
 
-	ZVAL_STRING(param, str, 1);
+	ZVAL_STRING(param, str);
 	efree(str);
 
 	RETURN_LONG(retval);
@@ -1545,7 +1562,7 @@ PHP_FUNCTION(ncurses_color_content)
 	int retval;
 	long c;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "lzzz", &c, &r, &g, &b) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "lz/z/z/", &c, &r, &g, &b) == FAILURE) {
 		return;
 	}
 	IS_NCURSES_INITIALIZED();
@@ -1569,7 +1586,7 @@ PHP_FUNCTION(ncurses_pair_content)
 	int retval;
 	long p;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "lzz", &p, &f, &b) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "lz/z/", &p, &f, &b) == FAILURE) {
 		return;
 	}
 	IS_NCURSES_INITIALIZED();
@@ -1771,7 +1788,7 @@ PHP_FUNCTION(ncurses_termname)
 
 	strlcpy(temp, termname(), sizeof(temp));
 
-	RETURN_STRINGL (temp, strlen(temp), 1);
+	N_RETURN_STRINGL (temp, strlen(temp), 1);
 }
 /* }}} */
 
@@ -1785,7 +1802,7 @@ PHP_FUNCTION(ncurses_longname)
 
 	strlcpy(temp, longname(), sizeof(temp));
 
-	RETURN_STRINGL (temp, strlen(temp), 1);
+	N_RETURN_STRINGL (temp, strlen(temp), 1);
 }
 /* }}} */
 
@@ -1798,7 +1815,7 @@ PHP_FUNCTION(ncurses_mousemask)
 	zval *param;
 	long newmask;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "lz", &newmask, &param) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "lz/", &newmask, &param) == FAILURE) {
 		return;
 	}
 	IS_NCURSES_INITIALIZED();
@@ -1819,7 +1836,7 @@ PHP_FUNCTION(ncurses_getmouse)
 	MEVENT mevent;
 	ulong retval;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z", &arg) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z/", &arg) == FAILURE) {
 		return;
 	}
 	IS_NCURSES_INITIALIZED();
@@ -1843,7 +1860,7 @@ PHP_FUNCTION(ncurses_getmouse)
    Pushes mouse event to queue */
 PHP_FUNCTION(ncurses_ungetmouse)
 {
-	zval *arg, **zvalue;
+	zval *arg, *zvalue;
 	MEVENT mevent;
 	ulong retval;
 
@@ -1852,29 +1869,29 @@ PHP_FUNCTION(ncurses_ungetmouse)
 	}
 	IS_NCURSES_INITIALIZED();
 
-	if (zend_hash_find(Z_ARRVAL_P(arg), "id", sizeof("id"), (void **) &zvalue) == SUCCESS) {
+	if ((zvalue = zend_hash_str_find(Z_ARRVAL_P(arg), "id", sizeof("id"))) != NULL) {
 		convert_to_long_ex(zvalue);
-		mevent.id = Z_LVAL_PP(zvalue);
+		mevent.id = Z_LVAL_P(zvalue);
 	}
 
-	if (zend_hash_find(Z_ARRVAL_P(arg), "x", sizeof("x"), (void **) &zvalue) == SUCCESS) {
+	if ((zvalue = zend_hash_str_find(Z_ARRVAL_P(arg), "x", sizeof("x"))) != NULL) {
 		convert_to_long_ex(zvalue);
-		mevent.x = Z_LVAL_PP(zvalue);
+		mevent.x = Z_LVAL_P(zvalue);
 	}
 
-	if (zend_hash_find(Z_ARRVAL_P(arg), "y", sizeof("y"), (void **) &zvalue) == SUCCESS) {
+	if ((zvalue = zend_hash_str_find(Z_ARRVAL_P(arg), "y", sizeof("y"))) != NULL) {
 		convert_to_long_ex(zvalue);
-		mevent.y = Z_LVAL_PP(zvalue);
+		mevent.y = Z_LVAL_P(zvalue);
 	}
 
-	if (zend_hash_find(Z_ARRVAL_P(arg), "z", sizeof("z"), (void **) &zvalue) == SUCCESS) {
+	if ((zvalue = zend_hash_str_find(Z_ARRVAL_P(arg), "z", sizeof("z"))) != NULL) {
 		convert_to_long_ex(zvalue);
-		mevent.z = Z_LVAL_PP(zvalue);
+		mevent.z = Z_LVAL_P(zvalue);
 	}
 
-	if (zend_hash_find(Z_ARRVAL_P(arg), "mmask", sizeof("mmask"), (void **) &zvalue) == SUCCESS) {
+	if ((zvalue = zend_hash_str_find(Z_ARRVAL_P(arg), "mmask", sizeof("mmask"))) != NULL) {
 		convert_to_long_ex(zvalue);
-		mevent.bstate = Z_LVAL_PP(zvalue);
+		mevent.bstate = Z_LVAL_P(zvalue);
 	}
 
 	retval = ungetmouse(&mevent);
@@ -1891,7 +1908,7 @@ PHP_FUNCTION(ncurses_mouse_trafo)
 	zend_bool toscreen;
 	int nx, ny, retval;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "zzb", &y, &x, &toscreen) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "z/z/b", &y, &x, &toscreen) == FAILURE) {
 		return;
 	}
 	IS_NCURSES_INITIALIZED();
@@ -1920,7 +1937,7 @@ PHP_FUNCTION(ncurses_wmouse_trafo)
 	WINDOW **win;
 	zend_bool toscreen;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rzzb", &handle, &y, &x, &toscreen) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rz/z/b", &handle, &y, &x, &toscreen) == FAILURE) {
 		return;
 	}
 
@@ -1948,7 +1965,7 @@ PHP_FUNCTION(ncurses_getyx)
 	zval *handle, *x, *y;
 	WINDOW **win;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rzz", &handle, &y, &x) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rz/z/", &handle, &y, &x) == FAILURE) {
 		return;
 	}
 
@@ -1968,7 +1985,7 @@ PHP_FUNCTION(ncurses_getmaxyx)
 	zval *handle, *x, *y;
 	WINDOW **win;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rzz", &handle, &y, &x) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "rz/z/", &handle, &y, &x) == FAILURE) {
 		return;
 	}
 
@@ -2224,8 +2241,8 @@ PHP_FUNCTION(ncurses_new_panel)
 		efree(panel);
 		RETURN_FALSE;
 	} else {
-		long id = ZEND_REGISTER_RESOURCE(return_value, panel, le_ncurses_panels);
-		set_panel_userptr(*panel, (void*)id);
+		ZEND_REGISTER_RESOURCE(return_value, panel, le_ncurses_panels);
+		set_panel_userptr(*panel, (void*)Z_RES_P(return_value));
 	}
 
 }
@@ -2240,7 +2257,7 @@ PHP_FUNCTION(ncurses_del_panel)
 	if (zend_parse_parameters(ZEND_NUM_ARGS() TSRMLS_CC, "r", &handle) == FAILURE) {
 		return;
 	}
-	zend_list_delete(Z_RESVAL_P(handle));
+	zend_list_delete(Z_RES_P(handle));
 
 	RETURN_TRUE;
 }
@@ -2377,9 +2394,8 @@ PHP_FUNCTION(ncurses_panel_above)
 	}
 
 	if (above) {
-		long id = (long)panel_userptr(above);
-		zend_list_addref(id);
-		RETURN_RESOURCE(id);
+		zend_resource * res = panel_userptr(above);
+		RETURN_RES(res);
 	} else {
 		RETURN_FALSE;
 	}
@@ -2405,9 +2421,12 @@ PHP_FUNCTION(ncurses_panel_below)
 		below = panel_below((PANEL *)0);
 	}
 	if (below) {
-		long id = (long)panel_userptr(below);
+		zend_resource * res = panel_userptr(below);
+        RETURN_RES(res);
+        /*
 		zend_list_addref(id);
 		RETURN_RESOURCE(id);
+        */
 	} else {
 		RETURN_FALSE;
 	}

@@ -244,6 +244,8 @@ PHP_MINIT_FUNCTION(ncurses)
 
 	ZEND_INIT_MODULE_GLOBALS(ncurses, php_ncurses_init_globals, NULL);
 
+    ncurses_globals.module_number = module_number;
+
 	le_ncurses_windows = zend_register_list_destructors_ex(ncurses_destruct_window, NULL, "ncurses_window", module_number);
 #if HAVE_NCURSES_PANEL
 	le_ncurses_panels = zend_register_list_destructors_ex(ncurses_destruct_panel, NULL, "ncurses_panel", module_number);
